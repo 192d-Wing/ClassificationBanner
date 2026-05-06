@@ -205,6 +205,21 @@
         - SECRET: Red background (#FF0000), Black text (#000000)
         - TOP SECRET: Orange background (#FF8C00), Black text (#000000)
         - TOP SECRET//SCI: Yellow background (#FFFF00), Black text (#000000)</string>
+
+      <!-- Font Settings Policy -->
+      <string id="POL_FontSettings">Banner Font and Size</string>
+      <string id="POL_FontSettings_Help">This policy setting controls the font size, banner height,
+        and font family used by the Classification Banner.
+
+        Font Size: Point size of the text drawn on the banner. Default is 12.
+        Banner Height: Height of the banner in pixels. Default is 20. Increase this when using a
+        larger font size so the text fits.
+        Font Family: Name of an installed Windows font. Default is "Arial".
+
+        Leave a field blank to keep the built-in default for that field.
+
+        If you do not configure this policy setting, the banner will use Arial 12pt in a 20px-tall
+        banner.</string>
     </stringTable>
 
     <presentationTable>
@@ -253,6 +268,15 @@
         <textBox refId="TXT_TextColor">
           <label>Text Color (hex, e.g., #000000):</label>
           <defaultValue>#000000</defaultValue>
+        </textBox>
+      </presentation>
+
+      <presentation id="POL_FontSettings">
+        <decimalTextBox refId="DEC_FontSize" defaultValue="12">Font Size (points):</decimalTextBox>
+        <decimalTextBox refId="DEC_BannerHeight" defaultValue="30">Banner Height (pixels):</decimalTextBox>
+        <textBox refId="TXT_FontFamily">
+          <label>Font Family:</label>
+          <defaultValue>Arial</defaultValue>
         </textBox>
       </presentation>
     </presentationTable>

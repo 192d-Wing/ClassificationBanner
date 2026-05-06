@@ -263,5 +263,18 @@
         <text id="TXT_TextColor" valueName="TextColor" maxLength="7" />
       </elements>
     </policy>
+
+    <!-- Font and Banner Size Settings -->
+    <policy name="POL_FontSettings" class="Machine" displayName="$(string.POL_FontSettings)"
+      explainText="$(string.POL_FontSettings_Help)" presentation="$(presentation.POL_FontSettings)"
+      key="SOFTWARE\ClassificationBanner">
+      <parentCategory ref="CAT_ClassificationBanner_Appearance" />
+      <supportedOn ref="windows:SUPPORTED_Windows10" />
+      <elements>
+        <decimal id="DEC_FontSize" valueName="FontSize" minValue="6" maxValue="72" />
+        <decimal id="DEC_BannerHeight" valueName="BannerHeight" minValue="10" maxValue="200" />
+        <text id="TXT_FontFamily" valueName="FontFamily" maxLength="64" />
+      </elements>
+    </policy>
   </policies>
 </policyDefinitions>

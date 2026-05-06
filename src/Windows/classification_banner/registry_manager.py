@@ -48,11 +48,12 @@ class RegistryManager:
             "FPCON",
             "CPCON",
             "GroupID",
+            "FontFamily",
         ]:
             settings[name] = self._read_string(key, name)
 
         # Integer values
-        for name in ["Enabled"]:
+        for name in ["Enabled", "FontSize", "BannerHeight"]:
             settings[name] = self._read_int(key, name)
 
         # Boolean values (stored as DWORD)
