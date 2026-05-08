@@ -16,7 +16,9 @@ from .constants import (
     DEFAULT_CHECK_INTERVAL,
     DEFAULT_CAVEATS,
     DEFAULT_DISSEMINATION_CONTROLS,
+    DEFAULT_ALLOWED_FULLSCREEN_PROCESSES,
 )
+from .fullscreen_watcher import normalize_allow_list
 
 
 class BannerSettings:
@@ -54,6 +56,14 @@ class BannerSettings:
         # Monitoring
         self.check_interval: int = DEFAULT_CHECK_INTERVAL
 
+        # Banner suppression allow list (case-folded exe basenames).
+        # Intentionally NOT in _WATCHED_ATTRS — changes here don't require
+        # banner recreation; the watcher reads this attribute directly each
+        # tick, so updates from gpupdate take effect on the next poll.
+        self.allowed_fullscreen_processes: tuple[str, ...] = (
+            DEFAULT_ALLOWED_FULLSCREEN_PROCESSES
+        )
+
         # Storage for change detection
         self.previous_settings: Dict[str, str | bool | int] = {}
 
@@ -86,6 +96,13 @@ class BannerSettings:
         # CPCON is special-cased: stored as int in registry, used as str
         if registry_settings.get("CPCON") is not None:
             self.cpcon = str(registry_settings["CPCON"])
+
+        # Allow list is special-cased: registry holds a semicolon-delimited
+        # string; we store a case-folded tuple of basenames.
+        if registry_settings.get("AllowedFullscreenProcesses") is not None:
+            self.allowed_fullscreen_processes = normalize_allow_list(
+                registry_settings["AllowedFullscreenProcesses"]
+            )
 
     # Attributes watched for change detection. Anything that should trigger a
     # banner recreate when its registry value changes belongs here.

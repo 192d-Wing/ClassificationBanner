@@ -309,3 +309,83 @@ def test_monitor_manager_get_all_monitors_returns_objects_with_required_attribut
     for m in monitors:
         for attr in ("x", "y", "width", "height"):
             assert hasattr(m, attr), f"Monitor is missing attribute {attr}"
+
+
+# ---------------------------------------------------------------------------
+# Fullscreen suppression allow-list (decision logic only — Win32 calls not
+# exercised here). decide_hide and normalize_allow_list are pure functions.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="fullscreen_watcher imports ctypes.windll")
+def test_normalize_allow_list_parses_and_lowercases():
+    from classification_banner.fullscreen_watcher import normalize_allow_list
+    assert normalize_allow_list(None) == ()
+    assert normalize_allow_list("") == ()
+    assert normalize_allow_list("PowerPnt.exe") == ("powerpnt.exe",)
+    assert normalize_allow_list(" a.exe ; B.EXE ;;c.exe ") == (
+        "a.exe", "b.exe", "c.exe"
+    )
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="fullscreen_watcher imports ctypes.windll")
+def test_decide_hide_empty_allow_list_returns_false():
+    from classification_banner.fullscreen_watcher import decide_hide
+    # Even when everything else matches, an empty allow list never hides.
+    assert decide_hide(
+        allowed=(),
+        foreground_proc="powerpnt.exe",
+        foreground_win_rect=(0, 0, 1920, 1080),
+        foreground_mon_rect=(0, 0, 1920, 1080),
+        banner_monitor=(0, 0, 1920, 1080),
+    ) is False
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="fullscreen_watcher imports ctypes.windll")
+def test_decide_hide_process_not_in_list_returns_false():
+    from classification_banner.fullscreen_watcher import decide_hide
+    assert decide_hide(
+        allowed=("powerpnt.exe",),
+        foreground_proc="notepad.exe",
+        foreground_win_rect=(0, 0, 1920, 1080),
+        foreground_mon_rect=(0, 0, 1920, 1080),
+        banner_monitor=(0, 0, 1920, 1080),
+    ) is False
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="fullscreen_watcher imports ctypes.windll")
+def test_decide_hide_different_monitor_returns_false():
+    from classification_banner.fullscreen_watcher import decide_hide
+    # Foreground app is fullscreen but on monitor 2; banner is on monitor 1.
+    assert decide_hide(
+        allowed=("powerpnt.exe",),
+        foreground_proc="powerpnt.exe",
+        foreground_win_rect=(1920, 0, 3840, 1080),
+        foreground_mon_rect=(1920, 0, 3840, 1080),
+        banner_monitor=(0, 0, 1920, 1080),
+    ) is False
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="fullscreen_watcher imports ctypes.windll")
+def test_decide_hide_maximized_but_not_fullscreen_returns_false():
+    from classification_banner.fullscreen_watcher import decide_hide
+    # Maximized respects the work area (y=20 because of banner). Not fullscreen.
+    assert decide_hide(
+        allowed=("powerpnt.exe",),
+        foreground_proc="powerpnt.exe",
+        foreground_win_rect=(0, 20, 1920, 1080),
+        foreground_mon_rect=(0, 0, 1920, 1080),
+        banner_monitor=(0, 0, 1920, 1080),
+    ) is False
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="fullscreen_watcher imports ctypes.windll")
+def test_decide_hide_true_fullscreen_on_banner_monitor_returns_true():
+    from classification_banner.fullscreen_watcher import decide_hide
+    assert decide_hide(
+        allowed=("powerpnt.exe",),
+        foreground_proc="POWERPNT.EXE",  # case-insensitive match
+        foreground_win_rect=(0, 0, 1920, 1080),
+        foreground_mon_rect=(0, 0, 1920, 1080),
+        banner_monitor=(0, 0, 1920, 1080),
+    ) is True

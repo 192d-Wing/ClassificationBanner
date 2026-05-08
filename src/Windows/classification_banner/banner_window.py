@@ -4,8 +4,16 @@ Banner window creation and management
 
 import tkinter as tk
 from tkinter import font
+from . import audit
 from .appbar import register_appbar_for_window, remove_appbar_for_window
-from .constants import ABE_TOP, INNER_PADX, INNER_PADY, KEEP_ON_TOP_INTERVAL
+from .constants import (
+    ABE_TOP,
+    FULLSCREEN_CHECK_INTERVAL,
+    INNER_PADX,
+    INNER_PADY,
+    KEEP_ON_TOP_INTERVAL,
+)
+from .fullscreen_watcher import decide_hide, query_foreground
 
 
 class BannerWindow:
@@ -17,6 +25,7 @@ class BannerWindow:
         self.system_info_text = system_info_text
         self.window: tk.Tk | None = None
         self.hwnd = None
+        self._hidden_for_fullscreen = False
 
         self._create_window()
 
@@ -57,6 +66,9 @@ class BannerWindow:
 
         # Keep on top
         self._keep_on_top()
+
+        # Step aside for allow-listed fullscreen apps on this monitor
+        self._schedule_fullscreen_check()
 
         # Cleanup on close
         self.window.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -173,6 +185,63 @@ class BannerWindow:
             self.window.after(KEEP_ON_TOP_INTERVAL, self._keep_on_top)
         except:
             pass
+
+    def _monitor_box(self) -> tuple[int, int, int, int]:
+        return (
+            self.monitor.x, self.monitor.y,
+            self.monitor.width, self.monitor.height,
+        )
+
+    def _schedule_fullscreen_check(self):
+        if self.window:
+            self.window.after(
+                FULLSCREEN_CHECK_INTERVAL, self._check_fullscreen
+            )
+
+    def _check_fullscreen(self):
+        try:
+            allowed = self.settings.allowed_fullscreen_processes
+            if not allowed:
+                # Fast path: no allow list configured, ensure visible.
+                if self._hidden_for_fullscreen:
+                    self._restore_for_fullscreen()
+                return
+
+            proc, win_rect, mon_rect = query_foreground()
+            should_hide = decide_hide(
+                allowed, proc, win_rect, mon_rect, self._monitor_box()
+            )
+
+            if should_hide and not self._hidden_for_fullscreen:
+                self._hide_for_fullscreen(proc or "?")
+            elif not should_hide and self._hidden_for_fullscreen:
+                self._restore_for_fullscreen()
+        except tk.TclError:
+            # Window is being destroyed — stop polling.
+            return
+        except OSError as e:
+            # Win32 call failed; log once-per-tick to audit but keep polling.
+            print(f"fullscreen watcher error: {e}")
+        finally:
+            self._schedule_fullscreen_check()
+
+    def _hide_for_fullscreen(self, process_name: str):
+        try:
+            self.window.withdraw()
+        except tk.TclError:
+            return
+        self._hidden_for_fullscreen = True
+        audit.log_banner_hidden(process_name, self._monitor_box())
+
+    def _restore_for_fullscreen(self):
+        try:
+            self.window.deiconify()
+            self.window.attributes("-topmost", True)
+            self.window.lift()
+        except tk.TclError:
+            return
+        self._hidden_for_fullscreen = False
+        audit.log_banner_restored(self._monitor_box())
 
     def _on_close(self):
         """Handle window close"""
