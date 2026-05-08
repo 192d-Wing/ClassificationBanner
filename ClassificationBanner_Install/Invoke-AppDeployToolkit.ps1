@@ -120,20 +120,11 @@ function Test-ClassificationBannerInstalled {
     $exeName = 'ClassificationBanner.exe'
     $installedExePath = Join-Path $installPath $exeName
 
-    $runKeyPath = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run'
-    $runKeyName = 'ClassificationBanner'
-
     $fileExists = Test-Path -Path $installedExePath -PathType Leaf
 
-    $regExists = $false
-    if (Test-Path $runKeyPath) {
-        $reg = Get-ItemProperty -Path $runKeyPath -Name $runKeyName -ErrorAction SilentlyContinue
-        if ($reg -and $reg.$runKeyName) {
-            $regExists = $true
-        }
-    }
+    $taskExists = $null -ne (Get-ScheduledTask -TaskName 'ClassificationBanner' -TaskPath '\Department of War\' -ErrorAction SilentlyContinue)
 
-    return ($fileExists -and $regExists)
+    return ($fileExists -and $taskExists)
 }
 
 function Install-ADTDeployment {
@@ -203,17 +194,30 @@ function Install-ADTDeployment {
         Copy-Item -Path $sourceExe -Destination $installedExePath -Force
         Write-ADTLogEntry -Message "Copied $sourceExe to $installedExePath" -Severity 1
 
-        # Configure Run-at-logon key
-        $runKeyPath = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run'
-        $runKeyName = 'ClassificationBanner'
-        $runKeyValue = "`"$installedExePath`""
-
-        if (-not (Test-Path $runKeyPath)) {
-            New-Item -Path $runKeyPath -Force | Out-Null
+        # Migrate from legacy HKLM Run key (used pre-v1.3.26). Removing it
+        # here keeps the new scheduled task as the sole autostart so we
+        # don't end up launching two banner instances on logon.
+        $legacyRunKeyPath = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run'
+        $legacyRunKeyName = 'ClassificationBanner'
+        if ((Test-Path $legacyRunKeyPath) -and (Get-ItemProperty -Path $legacyRunKeyPath -Name $legacyRunKeyName -ErrorAction SilentlyContinue)) {
+            Remove-ItemProperty -Path $legacyRunKeyPath -Name $legacyRunKeyName -ErrorAction SilentlyContinue
+            Write-ADTLogEntry -Message "Removed legacy Run key: $legacyRunKeyPath\$legacyRunKeyName" -Severity 1
         }
 
-        New-ItemProperty -Path $runKeyPath -Name $runKeyName -Value $runKeyValue -PropertyType String -Force | Out-Null
-        Write-ADTLogEntry -Message "Set Run key: $runKeyPath\$runKeyName = $runKeyValue" -Severity 1
+        # Register a per-machine scheduled task that launches the banner at
+        # logon for any user. Unlike the Run key, this can't be disabled
+        # from Task Manager > Startup, which matters for a security banner.
+        $taskName = 'ClassificationBanner'
+        $taskPath = '\Department of War\'
+        if (Get-ScheduledTask -TaskName $taskName -TaskPath $taskPath -ErrorAction SilentlyContinue) {
+            Unregister-ScheduledTask -TaskName $taskName -TaskPath $taskPath -Confirm:$false -ErrorAction SilentlyContinue
+        }
+        $taskAction    = New-ScheduledTaskAction -Execute $installedExePath
+        $taskTrigger   = New-ScheduledTaskTrigger -AtLogOn
+        $taskPrincipal = New-ScheduledTaskPrincipal -GroupId 'BUILTIN\Users' -RunLevel LeastPrivilege
+        $taskSettings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+        Register-ScheduledTask -TaskName $taskName -TaskPath $taskPath -Action $taskAction -Trigger $taskTrigger -Principal $taskPrincipal -Settings $taskSettings -Force | Out-Null
+        Write-ADTLogEntry -Message "Registered scheduled task: $taskPath$taskName -> $installedExePath" -Severity 1
 
         # Optional: kill any running instance and start fresh
         Get-Process -Name 'ClassificationBanner' -ErrorAction SilentlyContinue |
@@ -364,17 +368,24 @@ function Uninstall-ADTDeployment {
         $exeName = 'ClassificationBanner.exe'
         $installedExePath = Join-Path $installPath $exeName
 
-        $runKeyPath = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run'
-        $runKeyName = 'ClassificationBanner'
-
         # Stop process if running
         Get-Process -Name 'ClassificationBanner' -ErrorAction SilentlyContinue |
         Stop-Process -Force -ErrorAction SilentlyContinue
 
-        # Remove Run key
-        if (Test-Path $runKeyPath) {
-            Remove-ItemProperty -Path $runKeyPath -Name $runKeyName -ErrorAction SilentlyContinue
-            Write-ADTLogEntry -Message "Removed Run key: $runKeyPath\$runKeyName" -Severity 1
+        # Unregister scheduled task (current installs)
+        $taskName = 'ClassificationBanner'
+        $taskPath = '\Department of War\'
+        if (Get-ScheduledTask -TaskName $taskName -TaskPath $taskPath -ErrorAction SilentlyContinue) {
+            Unregister-ScheduledTask -TaskName $taskName -TaskPath $taskPath -Confirm:$false -ErrorAction SilentlyContinue
+            Write-ADTLogEntry -Message "Unregistered scheduled task: $taskPath$taskName" -Severity 1
+        }
+
+        # Clean up the legacy HKLM Run key if it survived from a pre-v1.3.26 install
+        $legacyRunKeyPath = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run'
+        $legacyRunKeyName = 'ClassificationBanner'
+        if ((Test-Path $legacyRunKeyPath) -and (Get-ItemProperty -Path $legacyRunKeyPath -Name $legacyRunKeyName -ErrorAction SilentlyContinue)) {
+            Remove-ItemProperty -Path $legacyRunKeyPath -Name $legacyRunKeyName -ErrorAction SilentlyContinue
+            Write-ADTLogEntry -Message "Removed legacy Run key: $legacyRunKeyPath\$legacyRunKeyName" -Severity 1
         }
 
         # Remove EXE
@@ -462,34 +473,28 @@ function Repair-ADTDeployment {
         $installPath = Join-Path $env:ProgramFiles 'Department of War\ClassificationBanner'
         $exeName = 'ClassificationBanner.exe'
         $installedExePath = Join-Path $installPath $exeName
-
-        $runKeyPath = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run'
-        $runKeyName = 'ClassificationBanner'
-        $runKeyValue = "`"$installedExePath`""
-
         $sourceExe = Join-Path (Join-Path $PSScriptRoot 'Files') $exeName
 
-        # If not present at all, just call Install logic
-        if (-not (Test-ClassificationBannerInstalled)) {
-            Write-ADTLogEntry -Message "Classification Banner not fully present. Re-applying install steps as part of repair." -Severity 2
-
-            if (-not (Test-Path $installPath)) {
-                New-Item -Path $installPath -ItemType Directory -Force | Out-Null
-            }
-
-            Copy-Item -Path $sourceExe -Destination $installedExePath -Force
-
-            if (-not (Test-Path $runKeyPath)) {
-                New-Item -Path $runKeyPath -Force | Out-Null
-            }
-            New-ItemProperty -Path $runKeyPath -Name $runKeyName -Value $runKeyValue -PropertyType String -Force | Out-Null
+        # Refresh the install dir + exe (idempotent; covers both
+        # "not-fully-present" and "drift" cases that the prior version
+        # branched on).
+        if (-not (Test-Path $installPath)) {
+            New-Item -Path $installPath -ItemType Directory -Force | Out-Null
         }
-        else {
-            # Refresh files and registry for good measure
-            Copy-Item -Path $sourceExe -Destination $installedExePath -Force
-            New-ItemProperty -Path $runKeyPath -Name $runKeyName -Value $runKeyValue -PropertyType String -Force | Out-Null
-            Write-ADTLogEntry -Message "Refreshed EXE and Run key for $($adtSession.AppName)." -Severity 1
+        Copy-Item -Path $sourceExe -Destination $installedExePath -Force
+
+        # (Re)register the scheduled task. Same shape as Install.
+        $taskName = 'ClassificationBanner'
+        $taskPath = '\Department of War\'
+        if (Get-ScheduledTask -TaskName $taskName -TaskPath $taskPath -ErrorAction SilentlyContinue) {
+            Unregister-ScheduledTask -TaskName $taskName -TaskPath $taskPath -Confirm:$false -ErrorAction SilentlyContinue
         }
+        $taskAction    = New-ScheduledTaskAction -Execute $installedExePath
+        $taskTrigger   = New-ScheduledTaskTrigger -AtLogOn
+        $taskPrincipal = New-ScheduledTaskPrincipal -GroupId 'BUILTIN\Users' -RunLevel LeastPrivilege
+        $taskSettings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+        Register-ScheduledTask -TaskName $taskName -TaskPath $taskPath -Action $taskAction -Trigger $taskTrigger -Principal $taskPrincipal -Settings $taskSettings -Force | Out-Null
+        Write-ADTLogEntry -Message "Repaired EXE and scheduled task for $($adtSession.AppName)." -Severity 1
     }
     catch {
         Write-ADTLogEntry -Message "Error during repair: $($_.Exception.Message)" -Severity 3
