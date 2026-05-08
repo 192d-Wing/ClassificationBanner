@@ -27,6 +27,8 @@ DEFAULT_CPCON = "1"
 DEFAULT_CHECK_INTERVAL = 15000  # 15 seconds in milliseconds
 DEFAULT_CAVEATS = None
 DEFAULT_DISSEMINATION_CONTROLS = None
+DEFAULT_ALLOWED_FULLSCREEN_PROCESSES: tuple[str, ...] = ()
+FULLSCREEN_CHECK_INTERVAL = 500  # ms — per-monitor poll cadence
 
 # Registry paths
 REGISTRY_PATHS = [

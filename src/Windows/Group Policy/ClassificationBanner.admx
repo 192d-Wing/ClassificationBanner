@@ -276,5 +276,19 @@
         <text id="TXT_FontFamily" valueName="FontFamily" maxLength="64" />
       </elements>
     </policy>
+
+    <!-- Fullscreen Suppression Allow List -->
+    <policy name="POL_AllowedFullscreenProcesses" class="Machine"
+      displayName="$(string.POL_AllowedFullscreenProcesses)"
+      explainText="$(string.POL_AllowedFullscreenProcesses_Help)"
+      presentation="$(presentation.POL_AllowedFullscreenProcesses)"
+      key="SOFTWARE\ClassificationBanner">
+      <parentCategory ref="CAT_ClassificationBanner_Appearance" />
+      <supportedOn ref="windows:SUPPORTED_Windows10" />
+      <elements>
+        <text id="TXT_AllowedFullscreenProcesses"
+          valueName="AllowedFullscreenProcesses" maxLength="2048" />
+      </elements>
+    </policy>
   </policies>
 </policyDefinitions>

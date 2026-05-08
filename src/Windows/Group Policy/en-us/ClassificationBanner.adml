@@ -206,6 +206,31 @@
         - TOP SECRET: Orange background (#FF8C00), Black text (#000000)
         - TOP SECRET//SCI: Yellow background (#FFFF00), Black text (#000000)</string>
 
+      <!-- Fullscreen Suppression Allow List Policy -->
+      <string id="POL_AllowedFullscreenProcesses">Fullscreen Banner Suppression Allow List</string>
+      <string id="POL_AllowedFullscreenProcesses_Help">This policy setting names processes
+        that are permitted to suppress the Classification Banner while running in true
+        fullscreen mode on the same monitor as the banner.
+
+        Use only for legitimate workflows that require an unobstructed display, such as
+        cleared briefings on a SCIF projector or a video wall. Adding a process to this
+        list weakens the security property the banner provides; the banner will become
+        invisible whenever that process is fullscreen.
+
+        Format: a semicolon-separated list of executable basenames (case-insensitive).
+        Example: powerpnt.exe;chrome.exe;vlc.exe
+
+        Behavior:
+        - The banner only steps aside when the foreground window of an allow-listed
+          process covers the entire physical monitor (true fullscreen). Maximized
+          windows already respect the banner's reserved screen area and are not
+          affected.
+        - Each suppression and restore event is written to
+          %ProgramData%\ClassificationBanner\audit.log with timestamp, hostname,
+          username, process name, and monitor.
+        - If you do not configure this policy setting, no process may suppress the
+          banner; the banner remains topmost over all fullscreen content.</string>
+
       <!-- Font Settings Policy -->
       <string id="POL_FontSettings">Banner Font and Size</string>
       <string id="POL_FontSettings_Help">This policy setting controls the font size, banner height,
@@ -277,6 +302,13 @@
         <textBox refId="TXT_FontFamily">
           <label>Font Family:</label>
           <defaultValue>Arial</defaultValue>
+        </textBox>
+      </presentation>
+
+      <presentation id="POL_AllowedFullscreenProcesses">
+        <textBox refId="TXT_AllowedFullscreenProcesses">
+          <label>Allowed processes (semicolon-separated, e.g. powerpnt.exe;vlc.exe):</label>
+          <defaultValue></defaultValue>
         </textBox>
       </presentation>
     </presentationTable>

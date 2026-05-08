@@ -49,6 +49,7 @@ class RegistryManager:
             "CPCON",
             "GroupID",
             "FontFamily",
+            "AllowedFullscreenProcesses",
         ]:
             settings[name] = self._read_string(key, name)
 
