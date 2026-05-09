@@ -214,7 +214,7 @@ function Install-ADTDeployment {
         }
         $taskAction    = New-ScheduledTaskAction -Execute $installedExePath
         $taskTrigger   = New-ScheduledTaskTrigger -AtLogOn
-        $taskPrincipal = New-ScheduledTaskPrincipal -GroupId 'BUILTIN\Users' -RunLevel LeastPrivilege
+        $taskPrincipal = New-ScheduledTaskPrincipal -GroupId 'BUILTIN\Users' -RunLevel Limited
         $taskSettings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
         Register-ScheduledTask -TaskName $taskName -TaskPath $taskPath -Action $taskAction -Trigger $taskTrigger -Principal $taskPrincipal -Settings $taskSettings -Force | Out-Null
         Write-ADTLogEntry -Message "Registered scheduled task: $taskPath$taskName -> $installedExePath" -Severity 1
@@ -491,7 +491,7 @@ function Repair-ADTDeployment {
         }
         $taskAction    = New-ScheduledTaskAction -Execute $installedExePath
         $taskTrigger   = New-ScheduledTaskTrigger -AtLogOn
-        $taskPrincipal = New-ScheduledTaskPrincipal -GroupId 'BUILTIN\Users' -RunLevel LeastPrivilege
+        $taskPrincipal = New-ScheduledTaskPrincipal -GroupId 'BUILTIN\Users' -RunLevel Limited
         $taskSettings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
         Register-ScheduledTask -TaskName $taskName -TaskPath $taskPath -Action $taskAction -Trigger $taskTrigger -Principal $taskPrincipal -Settings $taskSettings -Force | Out-Null
         Write-ADTLogEntry -Message "Repaired EXE and scheduled task for $($adtSession.AppName)." -Severity 1
