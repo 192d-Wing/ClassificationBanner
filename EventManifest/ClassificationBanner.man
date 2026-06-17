@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Instrumentation manifest for the ClassificationBanner ETW provider.
+
+  Defines a dedicated "ClassificationBanner/Operational" channel that
+  surfaces in Event Viewer under:
+      Applications and Services Logs > ClassificationBanner > Operational
+
+  Build:   EventManifest/build-eventmanifest.ps1  (mc.exe -> rc.exe -> link.exe)
+           produces ClassificationBannerEvents.dll (resource-only).
+  Install: wevtutil im ClassificationBanner.man /rf:<dll> /mf:<dll>
+  Remove:  wevtutil um ClassificationBanner.man
+
+  The provider GUID, channel value, and the three event descriptors
+  (Id/Version/Channel/Level) are mirrored byte-for-byte in
+  src/Windows/classification_banner/eventlog.py — keep them in sync.
+-->
+<instrumentationManifest
+    xmlns="http://schemas.microsoft.com/win/2004/08/events"
+    xmlns:win="http://manifests.microsoft.com/win/2004/08/windows/events"
+    xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <instrumentation>
+    <events>
+      <provider
+          name="ClassificationBanner"
+          guid="{34b8ff43-cbe0-4960-b499-a31859d10e47}"
+          symbol="PROVIDER_CLASSIFICATION_BANNER"
+          resourceFileName="C:\Program Files\Department of War\ClassificationBanner\ClassificationBannerEvents.dll"
+          messageFileName="C:\Program Files\Department of War\ClassificationBanner\ClassificationBannerEvents.dll">
+
+        <channels>
+          <channel
+              name="ClassificationBanner/Operational"
+              chid="Operational"
+              symbol="CHANNEL_OPERATIONAL"
+              type="Operational"
+              enabled="true"
+              value="16"/>
+        </channels>
+
+        <templates>
+          <template tid="tMessage">
+            <data name="Message" inType="win:UnicodeString" outType="xs:string"/>
+          </template>
+        </templates>
+
+        <events>
+          <event
+              symbol="BANNER_STARTED"
+              value="1"
+              version="0"
+              channel="ClassificationBanner/Operational"
+              level="win:Informational"
+              template="tMessage"
+              message="$(string.Event.Message)"/>
+          <event
+              symbol="BANNER_RECOVERED"
+              value="2"
+              version="0"
+              channel="ClassificationBanner/Operational"
+              level="win:Warning"
+              template="tMessage"
+              message="$(string.Event.Message)"/>
+          <event
+              symbol="BANNER_CRASHED"
+              value="3"
+              version="0"
+              channel="ClassificationBanner/Operational"
+              level="win:Error"
+              template="tMessage"
+              message="$(string.Event.Message)"/>
+        </events>
+      </provider>
+    </events>
+  </instrumentation>
+
+  <localization>
+    <resources culture="en-US">
+      <stringTable>
+        <string id="Event.Message" value="%1"/>
+      </stringTable>
+    </resources>
+  </localization>
+</instrumentationManifest>

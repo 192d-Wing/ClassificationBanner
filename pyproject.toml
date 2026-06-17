@@ -1,6 +1,6 @@
 [project]
 name = "classification_banner"
-version = "1.3.0"
+version = "1.4.0"
 description = "Windows Classification Bar"
 readme = "README.md"
 requires-python = ">=3.14"

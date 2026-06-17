@@ -43,6 +43,10 @@ jobs:
         shell: pwsh
         run: uv run pyinstaller --onefile --noconsole --distpath=.\dist\Windows\ --paths=.\src\Windows --name ClassificationBanner .\src\Windows\main.py
 
+      - name: Build Event Manifest DLL
+        shell: pwsh
+        run: .\EventManifest\build-eventmanifest.ps1
+
       - name: Copy Installer
         run: |
           Get-ChildItem ".\ClassificationBanner_Install" | ForEach-Object {
@@ -60,6 +64,12 @@ jobs:
       - name: Move ClassificationBanner.exe
         run: |
           Move-Item .\dist\Windows\ClassificationBanner.exe .\dist\Windows\Files\ClassificationBanner.exe
+        shell: pwsh
+
+      - name: Stage Event Manifest provider files
+        run: |
+          Copy-Item .\EventManifest\bin\ClassificationBannerEvents.dll .\dist\Windows\Files\ClassificationBannerEvents.dll -Force
+          Copy-Item .\EventManifest\ClassificationBanner.man .\dist\Windows\Files\ClassificationBanner.man -Force
         shell: pwsh
 
       - name: Update Version in installer

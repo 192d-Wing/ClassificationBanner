@@ -127,6 +127,97 @@ function Test-ClassificationBannerInstalled {
     return ($fileExists -and $taskExists)
 }
 
+function Remove-CBFileResilient {
+    <#
+    .SYNOPSIS
+        Remove a file, scheduling deletion on reboot if it is locked.
+    .DESCRIPTION
+        The EventLog service can keep a resource DLL mapped even after the
+        provider is unregistered, so a plain Remove-Item fails. Rather than
+        leave the file behind (or fail the whole uninstall), fall back to
+        MoveFileEx(MOVEFILE_DELAY_UNTIL_REBOOT) so Windows deletes it on the
+        next restart.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Path)
+
+    if (-not (Test-Path $Path)) { return }
+    try {
+        Remove-Item -Path $Path -Force -ErrorAction Stop
+        return
+    }
+    catch {
+        # Locked; fall through to reboot-scheduled deletion below.
+    }
+    try {
+        if (-not ('CB.Native' -as [type])) {
+            $sig = '[System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)] public static extern bool MoveFileEx(string lpExistingFileName, string lpNewFileName, int dwFlags);'
+            Add-Type -Namespace 'CB' -Name 'Native' -MemberDefinition $sig
+        }
+        # MOVEFILE_DELAY_UNTIL_REBOOT = 0x4; a null destination means delete.
+        [void][CB.Native]::MoveFileEx($Path, $null, 0x4)
+        Write-ADTLogEntry -Message "Locked file scheduled for deletion on reboot: $Path" -Severity 2
+    }
+    catch {
+        Write-ADTLogEntry -Message "Could not remove or schedule deletion of locked file: $Path" -Severity 2
+    }
+}
+
+function Set-CBEventResourceDll {
+    <#
+    .SYNOPSIS
+        Place the ETW event-log resource DLL and return the path to register.
+    .DESCRIPTION
+        The Windows Event Log service keeps a publisher's resource DLL mapped
+        (locked) once events have been rendered, and does NOT release it on
+        `wevtutil um` — only on a service restart. To upgrade in place without
+        restarting that core service:
+          - if the installed DLL already matches the staged one (the common
+            case; the manifest schema rarely changes), keep it as-is;
+          - otherwise copy it, and if the canonical name is locked, fall back
+            to a versioned filename so we never have to overwrite a locked file.
+        The caller registers the manifest with /rf /mf against the returned
+        path, so the filename is flexible.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$SourceDll,
+        [Parameter(Mandatory)][string]$InstallPath,
+        [Parameter(Mandatory)][string]$Version
+    )
+
+    $canonical = Join-Path $InstallPath 'ClassificationBannerEvents.dll'
+    $srcHash = (Get-FileHash -Path $SourceDll -Algorithm SHA256).Hash
+
+    $active = $null
+    if ((Test-Path $canonical) -and ((Get-FileHash -Path $canonical -Algorithm SHA256).Hash -eq $srcHash)) {
+        $active = $canonical  # Already current — no copy needed, no lock to fight.
+    }
+    else {
+        foreach ($dest in @($canonical, (Join-Path $InstallPath "ClassificationBannerEvents-$Version.dll"))) {
+            try {
+                Copy-Item -Path $SourceDll -Destination $dest -Force -ErrorAction Stop
+                $active = $dest
+                break
+            }
+            catch {
+                # Destination locked by the EventLog service; try the next name.
+            }
+        }
+    }
+    if (-not $active) {
+        throw "Unable to write event-log resource DLL; all candidate paths are locked."
+    }
+
+    # Drop any stale resource DLLs from prior upgrades so versioned copies don't
+    # accumulate; reboot-schedule any still locked by the EventLog service.
+    Get-ChildItem -Path $InstallPath -Filter 'ClassificationBannerEvents*.dll' -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -ne $active } |
+        ForEach-Object { Remove-CBFileResilient -Path $_.FullName }
+
+    return $active
+}
+
 function Install-ADTDeployment {
     [CmdletBinding()]
     param
@@ -215,9 +306,44 @@ function Install-ADTDeployment {
         $taskAction    = New-ScheduledTaskAction -Execute $installedExePath
         $taskTrigger   = New-ScheduledTaskTrigger -AtLogOn
         $taskPrincipal = New-ScheduledTaskPrincipal -GroupId 'BUILTIN\Users' -RunLevel Limited
-        $taskSettings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+        # RestartCount/RestartInterval self-heal the banner if it ever exits
+        # unexpectedly (e.g. an uncaught error around sleep/resume) without
+        # waiting for the next logon.
+        $taskSettings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
         Register-ScheduledTask -TaskName $taskName -TaskPath $taskPath -Action $taskAction -Trigger $taskTrigger -Principal $taskPrincipal -Settings $taskSettings -Force | Out-Null
         Write-ADTLogEntry -Message "Registered scheduled task: $taskPath$taskName -> $installedExePath" -Severity 1
+
+        # Register the ETW event manifest so banner crash/diagnostic events
+        # surface in Event Viewer under Applications and Services Logs >
+        # ClassificationBanner > Operational, rendered cleanly via the
+        # provider's resource DLL (no "description cannot be found" wrapper).
+        # Skipped when the package was built without the provider files (e.g.
+        # the build host lacked the Windows SDK); the banner still runs, just
+        # without event logging.
+        $filesDir = Join-Path $PSScriptRoot 'Files'
+        $srcEventDll = Join-Path $filesDir 'ClassificationBannerEvents.dll'
+        $srcEventMan = Join-Path $filesDir 'ClassificationBanner.man'
+        if ((Test-Path $srcEventDll) -and (Test-Path $srcEventMan)) {
+            $eventMan = Join-Path $installPath 'ClassificationBanner.man'
+            $wevtutil = Join-Path $env:SystemRoot 'System32\wevtutil.exe'
+            # Unregister any prior version first so re-installs/upgrades are clean.
+            & $wevtutil um $srcEventMan 2>$null
+            # Place the resource DLL. The EventLog service keeps a previously-
+            # rendered resource DLL mapped (locked) even after `um`, so: if the
+            # installed DLL already matches, skip the copy; otherwise copy,
+            # falling back to a versioned filename when the canonical name is
+            # locked. We register the manifest (/rf /mf) against the result.
+            $eventDll = Set-CBEventResourceDll -SourceDll $srcEventDll -InstallPath $installPath -Version $adtSession.AppVersion
+            Copy-Item -Path $srcEventMan -Destination $eventMan -Force
+            & $wevtutil im $eventMan /rf:"$eventDll" /mf:"$eventDll"
+            if ($LASTEXITCODE -ne 0) {
+                throw "wevtutil im failed for ClassificationBanner manifest (exit $LASTEXITCODE); event logging would be unregistered."
+            }
+            Write-ADTLogEntry -Message "Registered ETW event manifest -> channel ClassificationBanner/Operational (resource: $eventDll)" -Severity 1
+        }
+        else {
+            Write-ADTLogEntry -Message "Event-log provider files absent from package; skipping ETW manifest registration (banner runs without event logging)." -Severity 2
+        }
 
         # Optional: kill any running instance and start fresh
         Get-Process -Name 'ClassificationBanner' -ErrorAction SilentlyContinue |
@@ -388,6 +514,18 @@ function Uninstall-ADTDeployment {
             Write-ADTLogEntry -Message "Removed legacy Run key: $legacyRunKeyPath\$legacyRunKeyName" -Severity 1
         }
 
+        # Unregister the ETW event manifest and remove its provider files
+        # (including any versioned resource DLLs left by in-place upgrades).
+        $eventMan = Join-Path $installPath 'ClassificationBanner.man'
+        $wevtutil = Join-Path $env:SystemRoot 'System32\wevtutil.exe'
+        if (Test-Path $eventMan) {
+            & $wevtutil um $eventMan 2>$null
+            Write-ADTLogEntry -Message "Unregistered ETW event manifest: ClassificationBanner" -Severity 1
+        }
+        Get-ChildItem -Path $installPath -Filter 'ClassificationBannerEvents*.dll' -ErrorAction SilentlyContinue |
+            ForEach-Object { Remove-CBFileResilient -Path $_.FullName }
+        Remove-CBFileResilient -Path $eventMan
+
         # Remove EXE
         if (Test-Path $installedExePath) {
             Remove-Item -Path $installedExePath -Force -ErrorAction SilentlyContinue
@@ -492,9 +630,30 @@ function Repair-ADTDeployment {
         $taskAction    = New-ScheduledTaskAction -Execute $installedExePath
         $taskTrigger   = New-ScheduledTaskTrigger -AtLogOn
         $taskPrincipal = New-ScheduledTaskPrincipal -GroupId 'BUILTIN\Users' -RunLevel Limited
-        $taskSettings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+        # RestartCount/RestartInterval self-heal the banner if it ever exits
+        # unexpectedly (e.g. an uncaught error around sleep/resume) without
+        # waiting for the next logon.
+        $taskSettings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
         Register-ScheduledTask -TaskName $taskName -TaskPath $taskPath -Action $taskAction -Trigger $taskTrigger -Principal $taskPrincipal -Settings $taskSettings -Force | Out-Null
-        Write-ADTLogEntry -Message "Repaired EXE and scheduled task for $($adtSession.AppName)." -Severity 1
+
+        # (Re)register the ETW event manifest. Same shape as Install:
+        # unregister first to release the EventLog service's DLL lock. Skipped
+        # when the package lacks the provider files.
+        $filesDir = Join-Path $PSScriptRoot 'Files'
+        $srcEventDll = Join-Path $filesDir 'ClassificationBannerEvents.dll'
+        $srcEventMan = Join-Path $filesDir 'ClassificationBanner.man'
+        if ((Test-Path $srcEventDll) -and (Test-Path $srcEventMan)) {
+            $eventMan = Join-Path $installPath 'ClassificationBanner.man'
+            $wevtutil = Join-Path $env:SystemRoot 'System32\wevtutil.exe'
+            & $wevtutil um $srcEventMan 2>$null
+            $eventDll = Set-CBEventResourceDll -SourceDll $srcEventDll -InstallPath $installPath -Version $adtSession.AppVersion
+            Copy-Item -Path $srcEventMan -Destination $eventMan -Force
+            & $wevtutil im $eventMan /rf:"$eventDll" /mf:"$eventDll"
+            if ($LASTEXITCODE -ne 0) {
+                throw "wevtutil im failed for ClassificationBanner manifest (exit $LASTEXITCODE); event logging would be unregistered."
+            }
+        }
+        Write-ADTLogEntry -Message "Repaired EXE, scheduled task, and event manifest for $($adtSession.AppName)." -Severity 1
     }
     catch {
         Write-ADTLogEntry -Message "Error during repair: $($_.Exception.Message)" -Severity 3
