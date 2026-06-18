@@ -12,7 +12,7 @@ __all__ = [
     "settings",
     "system_info",
 ]
-__version__ = "1.4.0"
+__version__ = "1.4.1"
 
 from . import appbar
 from . import banner

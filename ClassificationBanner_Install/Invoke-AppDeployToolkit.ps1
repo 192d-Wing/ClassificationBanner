@@ -218,6 +218,43 @@ function Set-CBEventResourceDll {
     return $active
 }
 
+function Register-CBScheduledTask {
+    <#
+    .SYNOPSIS
+        (Re)register the per-machine ClassificationBanner scheduled task.
+    .DESCRIPTION
+        Launches the banner at logon AND on workstation unlock. An AtLogOn-only
+        trigger does NOT fire when a user unlocks the session or resumes from
+        sleep (the most common "log back in" path), which would otherwise leave
+        the banner down until the next full logon. RestartCount/RestartInterval
+        self-heal an unexpected exit; MultipleInstances=IgnoreNew keeps the
+        unlock trigger from spawning a second banner when one is already up.
+
+        Registered per-machine for BUILTIN\Users so it can't be disabled from
+        Task Manager > Startup, which matters for a mandatory security banner.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$ExePath)
+
+    $taskName = 'ClassificationBanner'
+    $taskPath = '\Department of War\'
+    if (Get-ScheduledTask -TaskName $taskName -TaskPath $taskPath -ErrorAction SilentlyContinue) {
+        Unregister-ScheduledTask -TaskName $taskName -TaskPath $taskPath -Confirm:$false -ErrorAction SilentlyContinue
+    }
+
+    $action = New-ScheduledTaskAction -Execute $ExePath
+    $logonTrigger = New-ScheduledTaskTrigger -AtLogOn
+    # SessionUnlock (StateChange = 8) — not exposed by New-ScheduledTaskTrigger,
+    # so build it from the CIM class directly.
+    $sscClass = Get-CimClass -Namespace Root/Microsoft/Windows/TaskScheduler -ClassName MSFT_TaskSessionStateChangeTrigger
+    $unlockTrigger = New-CimInstance -CimClass $sscClass -ClientOnly
+    $unlockTrigger.StateChange = 8
+    $principal = New-ScheduledTaskPrincipal -GroupId 'BUILTIN\Users' -RunLevel Limited
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew
+
+    Register-ScheduledTask -TaskName $taskName -TaskPath $taskPath -Action $action -Trigger @($logonTrigger, $unlockTrigger) -Principal $principal -Settings $settings -Force | Out-Null
+}
+
 function Install-ADTDeployment {
     [CmdletBinding()]
     param
@@ -296,22 +333,9 @@ function Install-ADTDeployment {
         }
 
         # Register a per-machine scheduled task that launches the banner at
-        # logon for any user. Unlike the Run key, this can't be disabled
-        # from Task Manager > Startup, which matters for a security banner.
-        $taskName = 'ClassificationBanner'
-        $taskPath = '\Department of War\'
-        if (Get-ScheduledTask -TaskName $taskName -TaskPath $taskPath -ErrorAction SilentlyContinue) {
-            Unregister-ScheduledTask -TaskName $taskName -TaskPath $taskPath -Confirm:$false -ErrorAction SilentlyContinue
-        }
-        $taskAction    = New-ScheduledTaskAction -Execute $installedExePath
-        $taskTrigger   = New-ScheduledTaskTrigger -AtLogOn
-        $taskPrincipal = New-ScheduledTaskPrincipal -GroupId 'BUILTIN\Users' -RunLevel Limited
-        # RestartCount/RestartInterval self-heal the banner if it ever exits
-        # unexpectedly (e.g. an uncaught error around sleep/resume) without
-        # waiting for the next logon.
-        $taskSettings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
-        Register-ScheduledTask -TaskName $taskName -TaskPath $taskPath -Action $taskAction -Trigger $taskTrigger -Principal $taskPrincipal -Settings $taskSettings -Force | Out-Null
-        Write-ADTLogEntry -Message "Registered scheduled task: $taskPath$taskName -> $installedExePath" -Severity 1
+        # logon and on workstation unlock (see Register-CBScheduledTask).
+        Register-CBScheduledTask -ExePath $installedExePath
+        Write-ADTLogEntry -Message "Registered scheduled task: \Department of War\ClassificationBanner -> $installedExePath" -Severity 1
 
         # Register the ETW event manifest so banner crash/diagnostic events
         # surface in Event Viewer under Applications and Services Logs >
@@ -621,20 +645,8 @@ function Repair-ADTDeployment {
         }
         Copy-Item -Path $sourceExe -Destination $installedExePath -Force
 
-        # (Re)register the scheduled task. Same shape as Install.
-        $taskName = 'ClassificationBanner'
-        $taskPath = '\Department of War\'
-        if (Get-ScheduledTask -TaskName $taskName -TaskPath $taskPath -ErrorAction SilentlyContinue) {
-            Unregister-ScheduledTask -TaskName $taskName -TaskPath $taskPath -Confirm:$false -ErrorAction SilentlyContinue
-        }
-        $taskAction    = New-ScheduledTaskAction -Execute $installedExePath
-        $taskTrigger   = New-ScheduledTaskTrigger -AtLogOn
-        $taskPrincipal = New-ScheduledTaskPrincipal -GroupId 'BUILTIN\Users' -RunLevel Limited
-        # RestartCount/RestartInterval self-heal the banner if it ever exits
-        # unexpectedly (e.g. an uncaught error around sleep/resume) without
-        # waiting for the next logon.
-        $taskSettings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
-        Register-ScheduledTask -TaskName $taskName -TaskPath $taskPath -Action $taskAction -Trigger $taskTrigger -Principal $taskPrincipal -Settings $taskSettings -Force | Out-Null
+        # (Re)register the scheduled task (logon + unlock; see Install).
+        Register-CBScheduledTask -ExePath $installedExePath
 
         # (Re)register the ETW event manifest. Same shape as Install:
         # unregister first to release the EventLog service's DLL lock. Skipped
